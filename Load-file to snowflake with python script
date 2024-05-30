@@ -1,0 +1,80 @@
+import pandas as pd
+import snowflake.connector as sf
+import csv
+source_path = "E:\\sf_SRC\\"
+source_file_path = source_path + "Odisha_Laptop_Scholarship.xlsx"
+
+dest_path = "E:\\sf_SRC\\sf_stage\\"
+dest_file_path = dest_path + "Odisha_Laptop_Scholarship.csv"
+
+read_file = pd.read_excel (source_file_path)
+read_file.to_csv(dest_file_path, index= False, header = True, sep = '|')
+
+#https://bv25706.ap-southeast-1.snowflakecomputing.com
+ctx = sf.connect(account = 'bv25706.ap-southeast-1',
+           warehouse = 'ADIDAS_WH',
+           database='ADIDAS_DB',
+           user = 'SNOWADMIN',
+           schema = 'ADIDAS_SC',
+           password='Snowadmin@123'
+)
+cur = ctx.cursor()
+cur.execute("select 1 as test")
+
+putcommand = r'PUT file://E:\sf_SRC\sf_stage\Odisha_Laptop_Scholarship.csv @adidas_sc.ADIDAS_INTERNAL_LOAD_STAGE AUTO_COMPRESS = TRUE OVERWRITE = TRUE;'
+print(putcommand)
+cur.execute(putcommand)
+
+cur.execute("TRUNCATE TABLE adidas_db.adidas_sc.STAGE_Odisha_Laptop_Scholarship_csv")
+#adidas_internal_load_stage/Odisha_Laptop_Scholarship.csv.gz
+copycommand= """COPY INTO adidas_db.adidas_sc.STAGE_Odisha_Laptop_Scholarship_csv
+FROM @adidas_internal_load_stage/Odisha_Laptop_Scholarship.csv.gz
+file_format = (type = 'csv' field_delimiter = '|' skip_header = 1);"""
+print(copycommand)
+cur.execute(copycommand)
+
+#################!!!!!STREAM!!!!!#########################
+stream_load = """ INSERT INTO adidas_sc.D_STREAM(STREAM, ETL_CREATED_DATE, ETL_MODIFIED_DATE)
+select DISTINCT S.STREAM , GETDATE(), GETDATE()
+from adidas_db.adidas_sc.STAGE_Odisha_Laptop_Scholarship_csv S
+LEFT JOIN adidas_sc.D_STREAM D On S.STREAM = D.STREAM
+WHERE D.STREAM IS NULL;"""
+cur.execute(stream_load)
+
+###############!!!!D_COLLEGE!!!!!###########################
+COLLEGE_LOAD = """ INSERT INTO ADIDAS_SC.D_COLLEGE(DISTRICTNAME,BLOCKNAME,COLLEGENAME,ETL_created_date,ETL_Modified_Date)
+SELECT DISTINCT S.DISTRICTNAME,S.BLOCKNAME,S.COLLEGENAME,GETDATE(),GETDATE()
+FROM ADIDAS_DB.ADIDAS_SC.STAGE_Odisha_Laptop_Scholarship_csv S
+LEFT JOIN adidas_sc.D_COLLEGE D
+On S.DISTRICTNAME = D.DISTRICTNAME AND S.BLOCKNAME=D.BLOCKNAME AND S.COLLEGENAME=D.COLLEGENAME
+WHERE D.DISTRICTNAME IS NULL;"""
+cur.execute(COLLEGE_LOAD)
+
+###############!!!!D_Candidate!!!!!###########################
+Candidate_LOAD = """INSERT INTO ADIDAS_SC.D_Candidate	(ROLLNO,FATHERNAME,MOTHERNAME,YEAR,ETL_created_date,ETL_Modified_Date)
+SELECT  DISTINCT S.ROLLNO,S.FATHERNAME,S.MOTHERNAME,S.YEAR, GETDATE(),GETDATE()
+FROM ADIDAS_DB.ADIDAS_SC.STAGE_Odisha_Laptop_Scholarship_csv S
+LEFT JOIN ADIDAS_sc.D_Candidate D
+On S.ROLLNO = D.ROLLNO AND S.YEAR = D.YEAR
+WHERE D.ROLLNO IS NULL;"""
+cur.execute(Candidate_LOAD)
+
+###############!!!!D_Category!!!!!###########################
+Category_LOAD = """INSERT INTO ADIDAS_SC.D_Category(CATEGORY,ETL_created_date,ETL_Modified_Date)
+SELECT DISTINCT S.CATEGORY,GETDATE(),GETDATE()
+FROM ADIDAS_DB.ADIDAS_SC.STAGE_Odisha_Laptop_Scholarship_csv S
+LEFT JOIN adidas_sc.D_Category D
+On S.CATEGORY = D.CATEGORY 
+WHERE D.CATEGORY IS NULL;"""
+cur.execute(Category_LOAD)
+
+###############!!!!FaCT load!!!!!###########################
+cur.execute("DELETE FROM ADIDAS_SC.F_BENEFICIARY WHERE YEAR IN(SELECT YEAR FROM ADIDAS_SC.STAGE_Odisha_Laptop_Scholarship_csv);")
+
+cur.execute("""INSERT INTO ADIDAS_SC.F_BENEFICIARY (CANDIDATE_fk,COLLEGE_FK,STREAM_fk,CATEGORY_fk,MARKSECURED,year,ETL_created_date,ETL_Modified_Date)
+SELECT C.CANDIDATE_PK AS CANDIDATE_fk,COL.COLLEGE_PK AS COLLEGE_fK,str.stream_pk AS STREAM_fk, CAL.CATEGORY_PK AS CATEGORY_fk, S.MARKSECURED,s.year,   GETDATE(),GETDATE()
+FROM ADIDAS_DB.ADIDAS_SC.STAGE_Odisha_Laptop_Scholarship_csv S
+left JOIN ADIDAS_SC.D_STREAM STR ON STR.STREAM = s.stream
+left JOIN ADIDAS_SC.D_Category CAL ON CAL.CATEGORY = s.CATEGORY
+left JOIN ADIDAS_SC.D_COLLEGE COL ON COL.DISTRICTNAME = s.DISTRICTNAME AND COL.BLOCKNAME = S.BLOCKNAME AND COL.COLLEGENAME = S.COLLEGENAME
+LEFT JOIN ADIDAS_SC.D_CANDIDATE C ON C.ROLLNO = S.ROLLNO AND C.YEAR =  S.YEAR;""")
