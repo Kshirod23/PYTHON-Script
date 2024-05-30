@@ -1,0 +1,19 @@
+import pyodbc
+import pandas as pd
+pyodbc.drivers()
+
+conn = pyodbc.connect("DRIVER={SQL Server Native Client 11.0};"
+                                 "SERVER=KSHIROD\SQLEXPRESS;"
+                                 "DATABASE=AdventureWorks2019;"
+                                 "Trusted_Connection=yes;")
+
+cur=conn.cursor()
+
+cur.execute("SELECT * FROM AdventureWorks2019.dbo.EMPLOYEE")
+
+for row in cur:
+    print(row)
+df=pd.read_sql_query("SELECT * FROM AdventureWorks2019.dbo.EMPLOYEE",conn)
+df.head()
+df.tail()
+df.shape
